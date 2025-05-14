@@ -1,0 +1,37 @@
+# === Node.js ===
+node_modules
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# === Next.js ===
+.next
+out
+dist
+.vercel
+
+# === Build output ===
+build
+
+# === Environment variables ===
+.env
+.env.*
+
+# === TypeScript ===
+*.tsbuildinfo
+next-env.d.ts
+
+# === Test coverage ===
+coverage
+
+# === System files ===
+.DS_Store
+
+# === Yarn PnP ===
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
