@@ -12,10 +12,13 @@ export default function Home() {
   const [loading, setLoading] = useState(false)
 
   const search = async () => {
+    console.log("🔎 Search clicked with:", query)
     const res = await fetch(`http://localhost:4000/api/search?q=${encodeURIComponent(query)}`)
     const data = await res.json()
+    console.log("🔁 eBay API Response:", data)
     setResults(data)
   }
+  
 
   const analyzeDeal = async () => {
     setLoading(true)

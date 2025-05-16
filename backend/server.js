@@ -4,21 +4,18 @@ import cors from 'cors'
 import fetch from 'node-fetch'
 import OpenAI from 'openai'
 
-
 const app = express()
 app.use(cors())
 app.use(express.json())
 
 const EBAY_APP_ID = process.env.EBAY_APP_ID
-
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
 
-
-// === eBay Search Route ===
+// === eBay Search Route (use PRODUCTION endpoint) ===
 app.get('/api/search', async (req, res) => {
-  const query = req.query.q || 'gpu';
+  const query = req.query.q || 'gpu'
 
-  const url = `https://svcs.sandbox.ebay.com/services/search/FindingService/v1
+  const url = `https://svcs.ebay.com/services/search/FindingService/v1
     ?OPERATION-NAME=findItemsByKeywords
     &SERVICE-VERSION=1.0.0
     &SECURITY-APPNAME=${EBAY_APP_ID}
@@ -26,18 +23,19 @@ app.get('/api/search', async (req, res) => {
     &REST-PAYLOAD=true
     &keywords=${encodeURIComponent(query)}
     &paginationInput.entriesPerPage=10`
-    .replace(/\n/g, '').replace(/\s+/g, '');
+    .replace(/\n/g, '').replace(/\s+/g, '')
 
   try {
+    console.log("📡 eBay API URL:", url)
     const response = await fetch(url, {
       headers: {
         'X-EBAY-SOA-SECURITY-APPNAME': EBAY_APP_ID,
         'Accept': 'application/json'
       }
-    });
+    })
 
-    const data = await response.json();
-    const items = data.findItemsByKeywordsResponse?.[0]?.searchResult?.[0]?.item || [];
+    const data = await response.json()
+    const items = data.findItemsByKeywordsResponse?.[0]?.searchResult?.[0]?.item || []
 
     const results = items.map((item) => ({
       title: item.title?.[0],
@@ -45,32 +43,57 @@ app.get('/api/search', async (req, res) => {
       url: item.viewItemURL?.[0],
       image: item.galleryURL?.[0],
       source: 'eBay'
-    }));
+    }))
 
-    res.json(results);
+    res.json(results)
   } catch (err) {
-    console.error('eBay API error:', err);
+    console.error('eBay API error:', err)
     res.status(500).json({ error: 'eBay API failed' })
   }
 })
 
-// === AI Deal Analyzer Route ===
-
-const prices = {
-  "ryzen 5 3600": 70,
-  "gtx 1660 super": 110,
-  "16gb ram": 30,
-  "1tb ssd": 35,
-  "case + psu": 60
+// === UTIL: Extract part names from listing text ===
+function extractParts(text) {
+  const commonParts = [
+    "ryzen 5 3600", "gtx 1660 super", "gtx 1060", "rtx 3060", "i5 10400", "i7 8700",
+    "16gb ram", "32gb ram", "1tb ssd", "512gb ssd", "2tb hdd", "case", "power supply", "psu"
+  ]
+  const found = []
+  const lower = text.toLowerCase()
+  for (const part of commonParts) {
+    if (lower.includes(part)) found.push(part)
+  }
+  return found
 }
 
-const scores = {
-  "ryzen 5 3600": 14000,
-  "gtx 1660 super": 11000
+// === UTIL: Fetch average price from /api/search ===
+async function getAveragePrice(part) {
+  try {
+    const res = await fetch(`http://localhost:4000/api/search?q=${encodeURIComponent(part)}`)
+    const data = await res.json()
+    const prices = data
+      .map(item => parseFloat(item.price.replace(/[^0-9.]/g, '')))
+      .filter(p => !isNaN(p))
+      .slice(0, 3)
+
+    if (prices.length === 0) return null
+    const avg = prices.reduce((a, b) => a + b, 0) / prices.length
+    return Math.round(avg)
+  } catch {
+    return null
+  }
 }
 
+// === AI Deal Analyzer (live prices!) ===
 app.post('/api/analyze', async (req, res) => {
   const { listingText, listedPrice } = req.body
+  const parts = extractParts(listingText)
+
+  const prices = {}
+  for (const part of parts) {
+    const avg = await getAveragePrice(part)
+    if (avg !== null) prices[part] = avg
+  }
 
   const prompt = `
 A user submitted this PC listing:
@@ -79,9 +102,6 @@ They are asking $${listedPrice}.
 
 Here are estimated used part prices:
 ${Object.entries(prices).map(([part, price]) => `- ${part}: $${price}`).join('\n')}
-
-Here are estimated performance scores (higher is better):
-${Object.entries(scores).map(([part, score]) => `- ${part}: ${score}`).join('\n')}
 
 Estimate the value of the PC, determine if it's underpriced or overpriced, and respond in friendly language for a non-tech person.
   `
@@ -93,13 +113,13 @@ Estimate the value of the PC, determine if it's underpriced or overpriced, and r
     })
 
     const reply = aiResponse.choices[0].message.content
-    res.json({ reply })
+    res.json({ reply, usedPrices: prices })
   } catch (err) {
     console.error('OpenAI error:', err)
     res.status(500).json({ error: 'AI request failed' })
   }
 })
+
 app.listen(4000, () => {
   console.log('✅ Server running on http://localhost:4000')
 })
-
