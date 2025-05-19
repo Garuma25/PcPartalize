@@ -13,7 +13,13 @@ const EBAY_CLIENT_SECRET = process.env.EBAY_CLIENT_SECRET;
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 // === 1. Get eBay OAuth Token (Browse API) ===
+let cachedToken = null;
+let tokenExpiry = 0;
+
 async function getEbayAccessToken() {
+  if (cachedToken && Date.now() < tokenExpiry) {
+    return cachedToken;
+  }
   const credentials = Buffer.from(`${EBAY_CLIENT_ID}:${EBAY_CLIENT_SECRET}`).toString('base64');
   const response = await fetch('https://api.ebay.com/identity/v1/oauth2/token', {
     method: 'POST',
@@ -25,7 +31,10 @@ async function getEbayAccessToken() {
   });
 
   const data = await response.json();
-  return data.access_token;
+  cachedToken = data.access_token;
+  tokenExpiry = Date.now() + 1000 * 60 * 110; // 110 minutes
+
+  return cachedToken;
 }
 
 // === 2. Search Route using Browse API ===
