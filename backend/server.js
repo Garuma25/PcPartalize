@@ -1,98 +1,120 @@
-import 'dotenv/config'
-import express from 'express'
-import cors from 'cors'
-import fetch from 'node-fetch'
-import OpenAI from 'openai'
+import 'dotenv/config';
+import express from 'express';
+import cors from 'cors';
+import fetch from 'node-fetch';
+import OpenAI from 'openai';
 
-const app = express()
-app.use(cors())
-app.use(express.json())
+const app = express();
+app.use(cors());
+app.use(express.json());
 
-const EBAY_APP_ID = process.env.EBAY_APP_ID
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+const EBAY_CLIENT_ID = process.env.EBAY_CLIENT_ID;
+const EBAY_CLIENT_SECRET = process.env.EBAY_CLIENT_SECRET;
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-// === eBay Search Route (use PRODUCTION endpoint) ===
+// === 1. Get eBay OAuth Token (Browse API) ===
+async function getEbayAccessToken() {
+  const credentials = Buffer.from(`${EBAY_CLIENT_ID}:${EBAY_CLIENT_SECRET}`).toString('base64');
+  const response = await fetch('https://api.ebay.com/identity/v1/oauth2/token', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Basic ${credentials}`,
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body: 'grant_type=client_credentials&scope=https://api.ebay.com/oauth/api_scope',
+  });
+
+  const data = await response.json();
+  return data.access_token;
+}
+
+// === 2. Search Route using Browse API ===
 app.get('/api/search', async (req, res) => {
-  const query = req.query.q || 'gpu'
-
-  const url = `https://svcs.ebay.com/services/search/FindingService/v1
-    ?OPERATION-NAME=findItemsByKeywords
-    &SERVICE-VERSION=1.0.0
-    &SECURITY-APPNAME=${EBAY_APP_ID}
-    &RESPONSE-DATA-FORMAT=JSON
-    &REST-PAYLOAD=true
-    &keywords=${encodeURIComponent(query)}
-    &paginationInput.entriesPerPage=10`
-    .replace(/\n/g, '').replace(/\s+/g, '')
+  const query = req.query.q || 'gpu';
 
   try {
-    console.log("📡 eBay API URL:", url)
-    const response = await fetch(url, {
+    const accessToken = await getEbayAccessToken();
+    const eBayPCid= 175673;
+    const response = await fetch(`https://api.ebay.com/buy/browse/v1/item_summary/search?q=${encodeURIComponent(query)}&category_ids=${eBayPCid}&limit=50`, {
       headers: {
-        'X-EBAY-SOA-SECURITY-APPNAME': EBAY_APP_ID,
-        'Accept': 'application/json'
-      }
-    })
+        'Authorization': `Bearer ${accessToken}`,
+        'X-EBAY-C-MARKETPLACE-ID': 'EBAY_US',
+      },
+    });
 
-    const data = await response.json()
-    const items = data.findItemsByKeywordsResponse?.[0]?.searchResult?.[0]?.item || []
+    const data = await response.json();
 
-    const results = items.map((item) => ({
-      title: item.title?.[0],
-      price: item.sellingStatus?.[0]?.currentPrice?.[0]?.__value__,
-      url: item.viewItemURL?.[0],
-      image: item.galleryURL?.[0],
-      source: 'eBay'
-    }))
+    if (!data.itemSummaries) {
+      return res.status(500).json({ error: 'No items found' });
+    }
 
-    res.json(results)
+    // Filter by conditionId === "3000" (Used but functional), and valid price
+    const filtered = data.itemSummaries
+      .filter(item => item.conditionId === "3000" && item.price?.value)
+      .sort((a, b) => parseFloat(a.price.value) - parseFloat(b.price.value))
+      .slice(0, 10);
+
+    const results = filtered.map(item => ({
+      title: item.title,
+      price: item.price.value,
+      url: item.itemWebUrl,
+      image: item.image?.imageUrl,
+      source: 'eBay',
+      condition: item.condition
+    }));
+
+    res.json(results);
   } catch (err) {
-    console.error('eBay API error:', err)
-    res.status(500).json({ error: 'eBay API failed' })
+    console.error('eBay API error:', err);
+    res.status(500).json({ error: 'eBay API request failed' });
   }
-})
+});
 
-// === UTIL: Extract part names from listing text ===
+
+// === 3. Part Extractor ===
 function extractParts(text) {
   const commonParts = [
     "ryzen 5 3600", "gtx 1660 super", "gtx 1060", "rtx 3060", "i5 10400", "i7 8700",
     "16gb ram", "32gb ram", "1tb ssd", "512gb ssd", "2tb hdd", "case", "power supply", "psu"
-  ]
-  const found = []
-  const lower = text.toLowerCase()
+  ];
+  const found = [];
+  const lower = text.toLowerCase();
   for (const part of commonParts) {
-    if (lower.includes(part)) found.push(part)
+    if (lower.includes(part)) found.push(part);
   }
-  return found
+  return found;
 }
 
-// === UTIL: Fetch average price from /api/search ===
+// === 4. Average eBay Price from Search Results ===
 async function getAveragePrice(part) {
   try {
-    const res = await fetch(`http://localhost:4000/api/search?q=${encodeURIComponent(part)}`)
-    const data = await res.json()
-    const prices = data
-      .map(item => parseFloat(item.price.replace(/[^0-9.]/g, '')))
-      .filter(p => !isNaN(p))
-      .slice(0, 3)
+    const res = await fetch(`http://localhost:4000/api/search?q=${encodeURIComponent(part)}`);
+    const data = await res.json();
+    if (!Array.isArray(data)) return null;
 
-    if (prices.length === 0) return null
-    const avg = prices.reduce((a, b) => a + b, 0) / prices.length
-    return Math.round(avg)
+    const prices = data
+      .map(item => parseFloat(item.price))
+      .filter(p => !isNaN(p))
+      .slice(0, 3);
+
+    if (prices.length === 0) return null;
+    const avg = prices.reduce((a, b) => a + b, 0) / prices.length;
+    return Math.round(avg);
   } catch {
-    return null
+    return null;
   }
 }
 
-// === AI Deal Analyzer (live prices!) ===
-app.post('/api/analyze', async (req, res) => {
-  const { listingText, listedPrice } = req.body
-  const parts = extractParts(listingText)
 
-  const prices = {}
+// === 5. AI Deal Analyzer ===
+app.post('/api/analyze', async (req, res) => {
+  const { listingText, listedPrice } = req.body;
+  const parts = extractParts(listingText);
+
+  const prices = {};
   for (const part of parts) {
-    const avg = await getAveragePrice(part)
-    if (avg !== null) prices[part] = avg
+    const avg = await getAveragePrice(part);
+    if (avg !== null) prices[part] = avg;
   }
 
   const prompt = `
@@ -103,23 +125,23 @@ They are asking $${listedPrice}.
 Here are estimated used part prices:
 ${Object.entries(prices).map(([part, price]) => `- ${part}: $${price}`).join('\n')}
 
-Estimate the value of the PC, determine if it's underpriced or overpriced, and respond in friendly language for a non-tech person.
-  `
+Estimate the value of the PC, determine if it's underpriced or overpriced, and respond in friendly language for a non-tech person. Keep it short.
+  `;
 
   try {
     const aiResponse = await openai.chat.completions.create({
       model: 'gpt-3.5-turbo',
-      messages: [{ role: 'user', content: prompt }]
-    })
+      messages: [{ role: 'user', content: prompt }],
+    });
 
-    const reply = aiResponse.choices[0].message.content
-    res.json({ reply, usedPrices: prices })
+    const reply = aiResponse.choices[0].message.content;
+    res.json({ reply, usedPrices: prices });
   } catch (err) {
-    console.error('OpenAI error:', err)
-    res.status(500).json({ error: 'AI request failed' })
+    console.error('OpenAI error:', err);
+    res.status(500).json({ error: 'AI request failed' });
   }
-})
+});
 
 app.listen(4000, () => {
-  console.log('✅ Server running on http://localhost:4000')
-})
+  console.log('✅ Server running on http://localhost:4000');
+});
