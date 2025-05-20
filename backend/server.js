@@ -3,6 +3,15 @@ import express from 'express';
 import cors from 'cors';
 import fetch from 'node-fetch';
 import OpenAI from 'openai';
+import mongoose from 'mongoose';
+
+mongoose.connect(process.env.MONGODB_URI, {
+  dbName: 'usedpartpicker',
+}).then(() => {
+  console.log("✅ MongoDB connected");
+}).catch((err) => {
+  console.error("❌ MongoDB connection error:", err);
+});
 
 const app = express();
 app.use(cors());
