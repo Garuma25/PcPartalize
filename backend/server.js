@@ -134,7 +134,7 @@ They are asking $${listedPrice}.
 Here are estimated used part prices:
 ${Object.entries(prices).map(([part, price]) => `- ${part}: $${price}`).join('\n')}
 
-Estimate the value of the PC, determine if it's underpriced or overpriced, and respond in friendly language for a non-tech person. Keep it short.
+Estimate the value of the PC, list each item price, determine if it's underpriced or overpriced, and respond in friendly language for a non-tech person. Keep it short.
   `;
 
   try {
