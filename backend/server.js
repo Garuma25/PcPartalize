@@ -4,6 +4,7 @@ import cors from 'cors';
 import fetch from 'node-fetch';
 import OpenAI from 'openai';
 import mongoose from 'mongoose';
+import Part from './models/Part.js'; 
 
 mongoose.connect(process.env.MONGODB_URI, {
   dbName: 'usedpartpicker',
@@ -125,14 +126,37 @@ async function getAveragePrice(part) {
 
 
 // === 5. AI Deal Analyzer ===
+
 app.post('/api/analyze', async (req, res) => {
   const { listingText, listedPrice } = req.body;
-  const parts = extractParts(listingText);
 
+  const partsFound = extractParts(listingText); // crude match, can be improved later
   const prices = {};
-  for (const part of parts) {
-    const avg = await getAveragePrice(part);
-    if (avg !== null) prices[part] = avg;
+
+  for (const label of partsFound) {
+    const normalized = label.toLowerCase().replace(/\s+/g, '');
+
+    // Try to find part by alias
+    let part = await Part.findOne({ aliases: normalized });
+
+    if (part && part.last_known_price) {
+      prices[part.name] = part.last_known_price;
+    } else {
+      // fallback to eBay price
+      const ebayPrice = await getAveragePrice(label);
+      if (ebayPrice) {
+        prices[label] = ebayPrice;
+
+        // Add new part to DB with this alias
+        await Part.create({
+          name: label,
+          aliases: [normalized],
+          type: 'unknown',
+          performance_score: null,
+          last_known_price: ebayPrice
+        });
+      }
+    }
   }
 
   const prompt = `
